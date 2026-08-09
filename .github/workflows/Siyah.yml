@@ -1,0 +1,127 @@
+name: Buildroot Cached
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_session:
+        description: 'SSH after build?'
+        required: false
+        default: 'false'
+
+env:
+  BR2_VERSION: "2024.02.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ env.BR2_VERSION }}-${{ hashFiles('**/*.config') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.BR2_VERSION }}-
+            ccache-${{ runner.os }}-
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential g++ gcc git bison flex \
+            libncurses5-dev libncursesw5-dev \
+            libssl-dev wget cpio unzip rsync bc \
+            qemu-utils qemu-system-aarch64 file
+
+      - name: Clone Buildroot
+        run: |
+          git clone --depth 1 --branch $BR2_VERSION https://github.com/buildroot/buildroot.git
+
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: br-dl-${{ env.BR2_VERSION }}-${{ hashFiles('buildroot/configs/*') }}
+          restore-keys: br-dl-${{ env.BR2_VERSION }}-
+
+      - name: Cache Buildroot build
+        uses: actions/cache@v4
+        with:
+          path: buildroot/output/build
+          key: br-build-${{ env.BR2_VERSION }}-${{ hashFiles('buildroot/configs/*') }}
+          restore-keys: br-build-${{ env.BR2_VERSION }}-
+
+      - name: Apply config
+        run: |
+          cd buildroot
+          make qemu_aarch64_virt_defconfig
+          
+          ./utils/config --enable BR2_CCACHE
+          ./utils/config --enable BR2_PACKAGE_BASH
+          ./utils/config --enable BR2_PACKAGE_VIM
+          ./utils/config --enable BR2_PACKAGE_NANO
+          ./utils/config --enable BR2_PACKAGE_HTOP
+          ./utils/config --enable BR2_PACKAGE_OPENSSH
+          ./utils/config --enable BR2_PACKAGE_DROPBEAR
+          ./utils/config --enable BR2_PACKAGE_WGET
+          ./utils/config --enable BR2_PACKAGE_CURL
+          ./utils/config --enable BR2_PACKAGE_IPROUTE2
+          ./utils/config --enable BR2_PACKAGE_IPTABLES
+          ./utils/config --enable BR2_PACKAGE_TCPDUMP
+          ./utils/config --enable BR2_PACKAGE_SOCAT
+          ./utils/config --enable BR2_PACKAGE_NETCAT
+          ./utils/config --enable BR2_PACKAGE_RSYNC
+          ./utils/config --enable BR2_PACKAGE_PYTHON3
+          ./utils/config --enable BR2_PACKAGE_STRACE
+          ./utils/config --enable BR2_PACKAGE_BINUTILS
+          ./utils/config --enable BR2_PACKAGE_E2FSPROGS
+          ./utils/config --enable BR2_PACKAGE_DOSFSTOOLS
+          ./utils/config --enable BR2_PACKAGE_MTOOLS
+          ./utils/config --enable BR2_PACKAGE_ZSTD
+          ./utils/config --enable BR2_PACKAGE_XZ
+          ./utils/config --enable BR2_PACKAGE_LZ4
+          ./utils/config --enable BR2_PACKAGE_GZIP
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX
+          ./utils/config --enable BR2_PACKAGE_PCIUTILS
+          ./utils/config --enable BR2_PACKAGE_USBUTILS
+          ./utils/config --enable BR2_PACKAGE_OPENSSL
+          ./utils/config --enable BR2_PACKAGE_SCREEN
+          ./utils/config --enable BR2_PACKAGE_TMUX
+          ./utils/config --enable BR2_PACKAGE_MC
+          ./utils/config --enable BR2_PACKAGE_NCURSES
+          ./utils/config --enable BR2_PACKAGE_NCURSES_WCHAR
+          ./utils/config --enable BR2_TARGET_ROOTFS_CPIO_GZIP
+          ./utils/config --enable BR2_TARGET_ROOTFS_EXT2
+          ./utils/config --enable BR2_TARGET_ROOTFS_TAR
+
+      - name: Build
+        run: |
+          cd buildroot
+          make -j$(nproc) 2>&1 | tee build.log
+
+      - name: Inspect output
+        if: always()
+        run: |
+          ls -lah buildroot/output/images/ 2>/dev/null || echo "No images dir"
+          ls -lah buildroot/output/ 2>/dev/null || true
+          tail -100 buildroot/build.log 2>/dev/null || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildroot-images
+          path: |
+            buildroot/output/images/
+            buildroot/build.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Setup tmate
+        if: ${{ github.event.inputs.ssh_session == 'true' }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          
