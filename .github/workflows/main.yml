@@ -1,0 +1,210 @@
+name: Buildroot with Cache + SSH
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_session:
+        description: 'Start tmate SSH session after build?'
+        required: false
+        default: 'false'
+
+env:
+  BR2_VERSION: "2024.02.3"
+  BR2_DEFCONFIG: "qemu_aarch64_virt_defconfig"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # === CACHE LAYERS ===
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ env.BR2_VERSION }}-${{ hashFiles('*.config', 'configs/*') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.BR2_VERSION }}-
+            ccache-${{ runner.os }}-
+
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: br-dl-${{ env.BR2_VERSION }}-${{ hashFiles('buildroot/configs/*') }}
+          restore-keys: br-dl-${{ env.BR2_VERSION }}-
+
+      - name: Cache Buildroot build dir
+        uses: actions/cache@v4
+        with:
+          path: buildroot/output/build
+          key: br-build-${{ env.BR2_VERSION }}-${{ hashFiles('buildroot/configs/*', 'package/*/*.mk') }}
+          restore-keys: br-build-${{ env.BR2_VERSION }}-
+
+      # === DEPS ===
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential g++ gcc git bison flex \
+            libncurses5-dev libncursesw5-dev \
+            libssl-dev wget cpio unzip rsync bc \
+            qemu-utils qemu-system-aarch64 file
+
+      # === BUILDROOT ===
+      - name: Clone Buildroot
+        run: |
+          git clone --depth 1 --branch $BR2_VERSION https://github.com/buildroot/buildroot.git
+          cd buildroot
+          make $BR2_DEFCONFIG
+
+      - name: Apply custom config (TON LOT)
+        run: |
+          cd buildroot
+          # External toolchain (saves 15-20 min)
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL
+          ./utils/config --set-val BR2_TOOLCHAIN_EXTERNAL_BOOTLIN y
+          ./utils/config --set-str BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARCH "aarch64"
+          ./utils/config --set-str BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_VARIANT "musl"
+          
+          # ccache
+          ./utils/config --enable BR2_CCACHE
+          
+          # Rootfs overlay
+          ./utils/config --set-str BR2_ROOTFS_OVERLAY "../overlay"
+          
+          # Image format
+          ./utils/config --enable BR2_TARGET_ROOTFS_CPIO_GZIP
+          ./utils/config --enable BR2_TARGET_ROOTFS_EXT2
+          ./utils/config --enable BR2_TARGET_ROOTFS_TAR
+          
+          # === TON LOT OF PACKAGES ===
+          # Shells & core utils
+          ./utils/config --enable BR2_PACKAGE_BASH
+          ./utils/config --enable BR2_PACKAGE_ZSH
+          ./utils/config --enable BR2_PACKAGE_VIM
+          ./utils/config --enable BR2_PACKAGE_NANO
+          ./utils/config --enable BR2_PACKAGE_HTOP
+          ./utils/config --enable BR2_PACKAGE_NMON
+          
+          # Network
+          ./utils/config --enable BR2_PACKAGE_OPENSSH
+          ./utils/config --enable BR2_PACKAGE_DROPBEAR
+          ./utils/config --enable BR2_PACKAGE_WGET
+          ./utils/config --enable BR2_PACKAGE_CURL
+          ./utils/config --enable BR2_PACKAGE_IPROUTE2
+          ./utils/config --enable BR2_PACKAGE_IPTABLES
+          ./utils/config --enable BR2_PACKAGE_TCPDUMP
+          ./utils/config --enable BR2_PACKAGE_NMAP
+          ./utils/config --enable BR2_PACKAGE_SOCAT
+          ./utils/config --enable BR2_PACKAGE_NETCAT
+          ./utils/config --enable BR2_PACKAGE_RSYNC
+          
+          # Dev tools
+          ./utils/config --enable BR2_PACKAGE_GIT
+          ./utils/config --enable BR2_PACKAGE_PYTHON3
+          ./utils/config --enable BR2_PACKAGE_NODEJS
+          ./utils/config --enable BR2_PACKAGE_GCC_TARGET
+          ./utils/config --enable BR2_PACKAGE_MAKE
+          ./utils/config --enable BR2_PACKAGE_BINUTILS
+          ./utils/config --enable BR2_PACKAGE_STRACE
+          ./utils/config --enable BR2_PACKAGE_LTRACE
+          ./utils/config --enable BR2_PACKAGE_GDB
+          ./utils/config --enable BR2_PACKAGE_VALGRIND
+          ./utils/config --enable BR2_PACKAGE_PERF
+          
+          # Filesystems
+          ./utils/config --enable BR2_PACKAGE_E2FSPROGS
+          ./utils/config --enable BR2_PACKAGE_DOSFSTOOLS
+          ./utils/config --enable BR2_PACKAGE_MTOOLS
+          ./utils/config --enable BR2_PACKAGE_NTFS_3G
+          ./utils/config --enable BR2_PACKAGE_FUSE
+          
+          # Compression
+          ./utils/config --enable BR2_PACKAGE_ZSTD
+          ./utils/config --enable BR2_PACKAGE_XZ
+          ./utils/config --enable BR2_PACKAGE_LZ4
+          ./utils/config --enable BR2_PACKAGE_LZO
+          ./utils/config --enable BR2_PACKAGE_GZIP
+          
+          # Fun stuff
+          ./utils/config --enable BR2_PACKAGE_SL
+          ./utils/config --enable BR2_PACKAGE_CMATRIX
+          ./utils/config --enable BR2_PACKAGE_FIGLET
+          ./utils/config --enable BR2_PACKAGE_COWSAY
+          ./utils/config --enable BR2_PACKAGE_FORTUNE
+          ./utils/config --enable BR2_PACKAGE_NETHACK
+          ./utils/config --enable BR2_PACKAGE_GNUPLOT
+          
+          # Audio/Video
+          ./utils/config --enable BR2_PACKAGE_ALSA_UTILS
+          ./utils/config --enable BR2_PACKAGE_FFMPEG
+          ./utils/config --enable BR2_PACKAGE_MPV
+          ./utils/config --enable BR2_PACKAGE_IMAGEMAGICK
+          
+          # System
+          ./utils/config --enable BR2_PACKAGE_SYSTEMD
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX
+          ./utils/config --enable BR2_PACKAGE_KMOD
+          ./utils/config --enable BR2_PACKAGE_PCIUTILS
+          ./utils/config --enable BR2_PACKAGE_USBUTILS
+          ./utils/config --enable BR2_PACKAGE_HWDATA
+          ./utils/config --enable BR2_PACKAGE_DMIDECODE
+          ./utils/config --enable BR2_PACKAGE_LM_SENSORS
+          
+          # Crypto/Security
+          ./utils/config --enable BR2_PACKAGE_OPENSSL
+          ./utils/config --enable BR2_PACKAGE_GNUTLS
+          ./utils/config --enable BR2_PACKAGE_LIBGCRYPT
+          ./utils/config --enable BR2_PACKAGE_HAVEGED
+          
+          # Misc
+          ./utils/config --enable BR2_PACKAGE_SCREEN
+          ./utils/config --enable BR2_PACKAGE_TMUX
+          ./utils/config --enable BR2_PACKAGE_MC
+          ./utils/config --enable BR2_PACKAGE_NCDU
+          ./utils/config --enable BR2_PACKAGE_RANGER
+          ./utils/config --enable BR2_PACKAGE_FZF
+          ./utils/config --enable BR2_PACKAGE_FDUPES
+          ./utils/config --enable BR2_PACKAGE_TREE
+          ./utils/config --enable BR2_PACKAGE_JQ
+          ./utils/config --enable BR2_PACKAGE_RIPGREP
+          ./utils/config --enable BR2_PACKAGE_BAT
+          ./utils/config --enable BR2_PACKAGE_EXA
+          ./utils/config --enable BR2_PACKAGE_DUST
+          ./utils/config --enable BR2_PACKAGE_BTOP
+          ./utils/config --enable BR2_PACKAGE_LSD
+          ./utils/config --enable BR2_PACKAGE_GLOW
+          ./utils/config --enable BR2_PACKAGE_GITUI
+          ./utils/config --enable BR2_PACKAGE_LAZYGIT
+          ./utils/config --enable BR2_PACKAGE_BROOK
+          ./utils/config --enable BR2_PACKAGE_FZF
+          ./utils/config --enable BR2_PACKAGE_ZOXIDE
+          ./utils/config --enable BR2_PACKAGE_STarship
+
+      - name: Build
+        run: |
+          cd buildroot
+          make -j$(nproc) 2>&1 | tee build.log
+
+      - name: Inspect output
+        run: |
+          ls -lah buildroot/output/images/
+          file buildroot/output/images/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildroot-images
+          path: |
+            buildroot/output/images/
+            buildroot/build.log
+          retention-days: 7
+
+      - name: Setup tmate session
+        if: ${{ github.event.inputs.ssh_session == 'true' }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          
