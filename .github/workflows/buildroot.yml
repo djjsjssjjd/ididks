@@ -1,0 +1,135 @@
+name: Advanced Buildroot CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+
+jobs:
+  build-buildroot:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Host Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libncurses5-dev \
+            bc \
+            rsync \
+            unzip \
+            libssl-dev \
+            python3 \
+            git \
+            cpio \
+            wget \
+            libelf-dev \
+            pkg-config \
+            libtool \
+            automake \
+            autoconf \
+            flex \
+            bison \
+            texinfo
+
+      # 1. Cache Buildroot source downloads so it doesn't re-download packages every run
+      - name: Cache Buildroot Downloads (dl/)
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ${{ runner.os }}-buildroot-dl-${{ hashFiles('**/board/**/*', '**/configs/*') }}
+          restore-keys: |
+            ${{ runner.os }}-buildroot-dl-
+
+      # 2. Cache output/ to preserve .config, host tools, and build objects across runs
+      - name: Cache Output Directory (output/)
+        uses: actions/cache@v4
+        with:
+          path: output
+          key: ${{ runner.os }}-buildroot-output-${{ hashFiles('.config', 'configs/*') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildroot-output-${{ hashFiles('.config', 'configs/*') }}
+            ${{ runner.os }}-buildroot-output-
+
+      - name: Configure and Inject Extra Packages
+        run: |
+          # If you have a specific defconfig, load it first (change 'my_defconfig' to yours)
+          # If you rely strictly on an existing .config file, comment out the make line below
+          if [ -f "configs/my_defconfig" ]; then
+            make my_defconfig
+          fi
+
+          # Alternatively, ensure your target .config is active
+          if [ -f ".config" ]; then
+            echo "Using existing .config file..."
+          else
+            echo "Warning: No .config found! Ensure you commit your .config or load a defconfig."
+          endconf
+
+          # Programmatically enable a massive suite of extra packages and developer features
+          # (Enabling commonly needed utilities like network tools, debuggers, and python modules)
+          cat << 'EOF' >> .config
+
+          # --- Extra Networking & Security Packages ---
+          BR2_PACKAGE_CURL=y
+          BR2_PACKAGE_WGET=y
+          BR2_PACKAGE_OPENSSH=y
+          BR2_PACKAGE_DROPBEAR=y
+          BR2_PACKAGE_IPTABLES=y
+          BR2_PACKAGE_TCPDUMP=y
+          BR2_PACKAGE_BRIDGE_UTILS=y
+          BR2_PACKAGE_IPROUTE2=y
+          BR2_PACKAGE_ETHTOOL=y
+
+          # --- Extra System & Debugging Utilities ---
+          BR2_PACKAGE_HTOP=y
+          BR2_PACKAGE_STRACE=y
+          BR2_PACKAGE_GDB=y
+          BR2_PACKAGE_SCREEN=y
+          BR2_PACKAGE_TMUX=y
+          BR2_PACKAGE_PCIUTILS=y
+          BR2_PACKAGE_USBUTILS=y
+          BR2_PACKAGE_COREUTILS=y
+          BR2_PACKAGE_FINDUTILS=y
+          BR2_PACKAGE_GREP=y
+          BR2_PACKAGE_SED=y
+          BR2_PACKAGE_TAR=y
+          BR2_PACKAGE_GZIP=y
+          BR2_PACKAGE_BZIP2=y
+          BR2_PACKAGE_XZ=y
+
+          # --- Python 3 & Common Modules ---
+          BR2_PACKAGE_PYTHON3=y
+          BR2_PACKAGE_PYTHON3_ZLIB=y
+          BR2_PACKAGE_PYTHON3_SQLITE=y
+          BR2_PACKAGE_PYTHON3_SSL=y
+
+          # --- Storage & Filesystem Tools ---
+          BR2_PACKAGE_E2FSPROGS=y
+          BR2_PACKAGE_DOSFSTOOLS=y
+          BR2_PACKAGE_MTOOLS=y
+          BR2_PACKAGE_PARTED=y
+          EOF
+
+          # Clean up config dependencies after appending raw lines
+          make olddefconfig
+
+      - name: Build Buildroot
+        run: |
+          # Compile using all available CPU cores on the runner
+          make -j$(nproc)
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildroot-rootfs-and-images
+          path: |
+            output/images/
+            output/.config
+            
