@@ -1,7 +1,7 @@
 name: Debug with Upterm
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:
 
 jobs:
   debug:
@@ -12,8 +12,5 @@ jobs:
       - name: Setup upterm session
         uses: lhotari/action-upterm@v1
         with:
-          ## Options:
-          # limit-access-to-actor: true   # Only you can connect (recommended)
-          # wait-timeout-minutes: 30      # Auto-close after 30 min if no one connects
-          # detached: true                # Don't pause the workflow
-          
+          limit-access-to-actor: true
+ 
