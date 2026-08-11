@@ -1,0 +1,333 @@
+name: Buildroot ARM64 QEMU Virt
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  BUILDROOT_VERSION: "2024.11.1"
+  DEFCONFIG: qemu_aarch64_virt_defconfig
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git wget cpio unzip rsync bc \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            qemu-system-arm qemu-efi-aarch64 \
+            libncurses5-dev python3 file
+
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: buildroot-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot-config') }}
+          restore-keys: |
+            buildroot-dl-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Cache Buildroot ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: buildroot-ccache-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            buildroot-ccache-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Cache Buildroot build output
+        uses: actions/cache@v4
+        with:
+          path: buildroot/output
+          key: buildroot-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot-config') }}
+          restore-keys: |
+            buildroot-output-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Download Buildroot
+        run: |
+          wget -q https://buildroot.org/downloads/buildroot-${{ env.BUILDROOT_VERSION }}.tar.gz
+          tar -xzf buildroot-${{ env.BUILDROOT_VERSION }}.tar.gz
+          mv buildroot-${{ env.BUILDROOT_VERSION }} buildroot
+
+      - name: Apply custom config
+        run: |
+          cd buildroot
+          make ${{ env.DEFCONFIG }}
+
+          # Base system
+          ./utils/config --enable BR2_aarch64
+          ./utils/config --enable BR2_cortex_a72
+          ./utils/config --set-val BR2_TARGET_GENERIC_HOSTNAME "arm64-virt"
+          ./utils/config --set-val BR2_TARGET_GENERIC_ISSUE "Welcome to ARM64 Virt"
+          ./utils/config --enable BR2_TARGET_GENERIC_ROOT_PASSWD
+          ./utils/config --set-val BR2_TARGET_GENERIC_ROOT_PASSWD "root"
+          ./utils/config --enable BR2_TARGET_GENERIC_GETTY
+          ./utils/config --set-val BR2_TARGET_GENERIC_GETTY_PORT "ttyAMA0"
+          ./utils/config --enable BR2_SYSTEM_DHCP
+
+          # Toolchain - use external to speed up build
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL
+          ./utils/config --set-val BR2_TOOLCHAIN_EXTERNAL_PATH ""
+          ./utils/config --set-val BR2_TOOLCHAIN_EXTERNAL_PREFIX "aarch64-linux-gnu"
+          ./utils/config --set-val BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX "aarch64-linux-gnu"
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_GCC_13
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_6
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_HAS_THREADS
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_HAS_THREADS_NPTL
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_INET_RPC
+          ./utils/config --enable BR2_TOOLCHAIN_EXTERNAL_CXX
+
+          # Kernel
+          ./utils/config --enable BR2_LINUX_KERNEL
+          ./utils/config --enable BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG
+          ./utils/config --set-val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE "6.6.32"
+          ./utils/config --enable BR2_LINUX_KERNEL_VERSION_CUSTOM
+          ./utils/config --enable BR2_LINUX_KERNEL_IMAGE
+          ./utils/config --enable BR2_LINUX_KERNEL_GZIP
+          ./utils/config --set-val BR2_LINUX_KERNEL_INTREE_DTS_NAME "arm64/qemu/qemu-virt"
+
+          # Initramfs + Disk images
+          ./utils/config --enable BR2_TARGET_ROOTFS_CPIO
+          ./utils/config --enable BR2_TARGET_ROOTFS_CPIO_GZIP
+          ./utils/config --enable BR2_TARGET_ROOTFS_EXT2
+          ./utils/config --set-val BR2_TARGET_ROOTFS_EXT2_SIZE "512M"
+          ./utils/config --set-val BR2_TARGET_ROOTFS_EXT2_GEN "4"
+          ./utils/config --enable BR2_TARGET_ROOTFS_EXT2_LZ4
+          ./utils/config --enable BR2_TARGET_ROOTFS_TAR
+          ./utils/config --set-val BR2_TARGET_ROOTFS_TAR_OPTIONS "--owner=0 --group=0"
+
+          # Package manager: opkg
+          ./utils/config --enable BR2_PACKAGE_OPKG
+          ./utils/config --set-val BR2_PACKAGE_OPKG_CONF_URL ""
+
+          # Coreutils + BusyBox (full)
+          ./utils/config --enable BR2_PACKAGE_BUSYBOX_SHOW_OTHERS
+          ./utils/config --enable BR2_PACKAGE_COREUTILS
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_BINARIES
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_MOUNT
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_FSCK
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_PARTX
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_FDISK
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_SFDISK
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_LSBLK
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_BLKID
+          ./utils/config --enable BR2_PACKAGE_UTIL_LINUX_UUIDD
+          ./utils/config --enable BR2_PACKAGE_E2FSPROGS
+          ./utils/config --enable BR2_PACKAGE_E2FSPROGS_RESIZE2FS
+
+          # Shells
+          ./utils/config --enable BR2_PACKAGE_BASH
+          ./utils/config --enable BR2_PACKAGE_BASH_LOADABLES
+          ./utils/config --enable BR2_PACKAGE_DASH
+          ./utils/config --enable BR2_PACKAGE_ZSH
+
+          # Editors
+          ./utils/config --enable BR2_PACKAGE_NANO
+          ./utils/config --enable BR2_PACKAGE_VIM
+          ./utils/config --enable BR2_PACKAGE_VIM_RUNTIME
+
+          # Network tools
+          ./utils/config --enable BR2_PACKAGE_OPENSSH
+          ./utils/config --enable BR2_PACKAGE_OPENSSH_SERVER
+          ./utils/config --enable BR2_PACKAGE_OPENSSH_CLIENT
+          ./utils/config --enable BR2_PACKAGE_OPENSSH_KEY_UTILS
+          ./utils/config --enable BR2_PACKAGE_DROPBEAR
+          ./utils/config --enable BR2_PACKAGE_RSYNC
+          ./utils/config --enable BR2_PACKAGE_WGET
+          ./utils/config --enable BR2_PACKAGE_CURL
+          ./utils/config --enable BR2_PACKAGE_IPROUTE2
+          ./utils/config --enable BR2_PACKAGE_IPTABLES
+          ./utils/config --enable BR2_PACKAGE_TCPDUMP
+          ./utils/config --enable BR2_PACKAGE_SOCAT
+          ./utils/config --enable BR2_PACKAGE_NETCAT_OPENBSD
+          ./utils/config --enable BR2_PACKAGE_NMAP
+          ./utils/config --enable BR2_PACKAGE_DNSMASQ
+
+          # System monitoring / debugging
+          ./utils/config --enable BR2_PACKAGE_HTOP
+          ./utils/config --enable BR2_PACKAGE_IOSTAT
+          ./utils/config --enable BR2_PACKAGE_LSOF
+          ./utils/config --enable BR2_PACKAGE_STRACE
+          ./utils/config --enable BR2_PACKAGE_LTRACE
+          ./utils/config --enable BR2_PACKAGE_GDB
+          ./utils/config --enable BR2_PACKAGE_BCC
+          ./utils/config --enable BR2_PACKAGE_PCIUTILS
+          ./utils/config --enable BR2_PACKAGE_USBUTILS
+          ./utils/config --enable BR2_PACKAGE_KMOD
+          ./utils/config --enable BR2_PACKAGE_KMOD_TOOLS
+
+          # Filesystems
+          ./utils/config --enable BR2_PACKAGE_SQUASHFS
+          ./utils/config --enable BR2_PACKAGE_SQUASHFS_TOOLS
+          ./utils/config --enable BR2_PACKAGE_XFSPROGS
+          ./utils/config --enable BR2_PACKAGE_F2FS_TOOLS
+
+          # Compression / Archive
+          ./utils/config --enable BR2_PACKAGE_TAR
+          ./utils/config --enable BR2_PACKAGE_GZIP
+          ./utils/config --enable BR2_PACKAGE_XZ
+          ./utils/config --enable BR2_PACKAGE_ZSTD
+          ./utils/config --enable BR2_PACKAGE_LZ4
+          ./utils/config --enable BR2_PACKAGE_UNZIP
+          ./utils/config --enable BR2_PACKAGE_BZIP2
+          ./utils/config --enable BR2_PACKAGE_P7ZIP
+
+          # Text / Data processing
+          ./utils/config --enable BR2_PACKAGE_JQ
+          ./utils/config --enable BR2_PACKAGE_GAWK
+          ./utils/config --enable BR2_PACKAGE_SED
+          ./utils/config --enable BR2_PACKAGE_GREP
+          ./utils/config --enable BR2_PACKAGE_FINDUTILS
+          ./utils/config --enable BR2_PACKAGE_DIFFUTILS
+          ./utils/config --enable BR2_PACKAGE_PATCH
+          ./utils/config --enable BR2_PACKAGE_LESS
+
+          # Hardware / Firmware
+          ./utils/config --enable BR2_PACKAGE_LINUX_FIRMWARE
+          ./utils/config --enable BR2_PACKAGE_LINUX_FIRMWARE_USB_SERIAL_TI
+          ./utils/config --enable BR2_PACKAGE_LINUX_FIRMWARE_RTL_81XX
+          ./utils/config --enable BR2_PACKAGE_QEMU_GUEST_AGENT
+
+          # Misc utilities
+          ./utils/config --enable BR2_PACKAGE_SCREEN
+          ./utils/config --enable BR2_PACKAGE_TMUX
+          ./utils/config --enable BR2_PACKAGE_FILE
+          ./utils/config --enable BR2_PACKAGE_BC
+          ./utils/config --enable BR2_PACKAGE_DC
+          ./utils/config --enable BR2_PACKAGE_TIME
+          ./utils/config --enable BR2_PACKAGE_WHICH
+          ./utils/config --enable BR2_PACKAGE_WHOIS
+          ./utils/config --enable BR2_PACKAGE_TREE
+          ./utils/config --enable BR2_PACKAGE_NCAL
+          ./utils/config --enable BR2_PACKAGE_PROCPS_NG
+
+          # Init system: systemd or busybox init - let's use busybox init for small size
+          ./utils/config --set-val BR2_INIT_SYSTEM "busybox"
+
+          # Enable ccache
+          ./utils/config --enable BR2_CCACHE
+          ./utils/config --set-val BR2_CCACHE_DIR "${HOME}/.buildroot-ccache"
+
+          # Optimize for size
+          ./utils/config --set-val BR2_OPTIMIZE_S "2"
+
+          # Print config for debug
+          echo "=== Final Config ==="
+          grep -E "^(BR2_|# BR2_)" .config | head -100
+
+      - name: Build
+        run: |
+          cd buildroot
+          make -j$(nproc) 2>&1 | tee build.log
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp buildroot/output/images/Image artifacts/ || true
+          cp buildroot/output/images/Image.gz artifacts/ || true
+          cp buildroot/output/images/vmlinuz artifacts/ || true
+          cp buildroot/output/images/rootfs.cpio.gz artifacts/ || true
+          cp buildroot/output/images/rootfs.ext2 artifacts/ || true
+          cp buildroot/output/images/rootfs.ext2.lz4 artifacts/ || true
+          cp buildroot/output/images/rootfs.tar artifacts/ || true
+          ls -lah artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildroot-arm64-images
+          path: artifacts/*
+          retention-days: 7
+
+      - name: Create QEMU run script
+        run: |
+          cat > artifacts/run-qemu.sh << 'EOF'
+          #!/bin/bash
+          # Run the built ARM64 virt system in QEMU
+          # Usage: ./run-qemu.sh [disk|initramfs]
+
+          MODE=${1:-initramfs}
+          KERNEL="Image"
+          INITRD="rootfs.cpio.gz"
+          DISK="rootfs.ext2"
+
+          QEMU_ARGS=(
+            -machine virt,accel=tcg,gic-version=max
+            -cpu max
+            -m 2048
+            -smp 4
+            -serial stdio
+            -display none
+            -netdev user,id=net0,hostfwd=tcp::2222-:22
+            -device virtio-net-pci,netdev=net0
+            -device virtio-rng-pci
+          )
+
+          if [ "$MODE" = "disk" ]; then
+            exec qemu-system-aarch64 \
+              "${QEMU_ARGS[@]}" \
+              -kernel "$KERNEL" \
+              -append "root=/dev/vda console=ttyAMA0 rw" \
+              -drive file="$DISK",format=raw,if=virtio
+          else
+            exec qemu-system-aarch64 \
+              "${QEMU_ARGS[@]}" \
+              -kernel "$KERNEL" \
+              -append "console=ttyAMA0" \
+              -initrd "$INITRD"
+          fi
+          EOF
+          chmod +x artifacts/run-qemu.sh
+
+      - name: Upload run script
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-run-script
+          path: artifacts/run-qemu.sh
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: buildroot/build.log
+          retention-days: 3
+
+      - name: Summary
+        run: |
+          echo "## Buildroot ARM64 Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
+          for f in artifacts/*; do
+            if [ -f "$f" ]; then
+              size=$(ls -lh "$f" | awk '{print $5}')
+              echo "| $(basename $f) | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Run locally:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "qemu-system-aarch64 -machine virt -cpu max -m 2048 -smp 4 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -kernel Image -initrd rootfs.cpio.gz \\" >> $GITHUB_STEP_SUMMARY
+          echo '  -append "console=ttyAMA0" \' >> $GITHUB_STEP_SUMMARY
+          echo "  -netdev user,id=net0,hostfwd=tcp::2222-:22 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -device virtio-net-pci,netdev=net0 -serial stdio -display none" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
